@@ -164,29 +164,29 @@ pub const Query = struct {
         //defer allocator.free(out);
         //return try std.mem.join(allocator, "?", &.{ TEMPLATE, out });
     }
+
+    pub fn searchMovie(allocator: std.mem.Allocator, params: struct { query: []const u8, include_adult: bool = false, language: []const u8 = "en-US", primary_release_year: ?u32 = null, page: u32 = 1, region: ?[]u8 = undefined, year: ?u32 = null }) Query {
+        var fields = std.ArrayList(Field).init(allocator);
+        defer fields.deinit();
+        fields.append(Field.fromString(.{ .label = "query", .val = params.query })) catch unreachable;
+        fields.append(Field.fromBoolean(.{ .label = "include_adult", .val = params.include_adult })) catch unreachable;
+        fields.append(Field.fromString(.{ .label = "language", .val = params.language })) catch unreachable;
+        fields.append(Field.fromInt(.{ .label = "page", .val = params.page })) catch unreachable;
+        if (params.year != null) fields.append(Field.fromInt(.{ .label = "year", .val = params.year orelse unreachable })) catch unreachable;
+        if (params.primary_release_year != null) fields.append(Field.fromInt(.{ .label = "primary_release_year", .val = params.primary_release_year orelse unreachable })) catch unreachable;
+        if (params.region != null) fields.append(Field.fromString(.{ .label = "region", .val = params.region orelse unreachable })) catch unreachable;
+
+        return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/search/movie", .response_type = ResponseType.search_movie };
+    }
+
+    pub fn movieDetails(allocator: std.mem.Allocator, params: struct { movie_id: u32 }) Query {
+        var fields = std.ArrayList(Field).init(allocator);
+        defer fields.deinit();
+        fields.append(Field.fromInt(.{ .label = "movie_id", .val = params.movie_id, .field_type = FieldType.path_param })) catch unreachable;
+
+        return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}", .response_type = ResponseType.movie_details };
+    }
 };
-
-pub fn searchMovieQuery(allocator: std.mem.Allocator, params: struct { query: []const u8, include_adult: bool = false, language: []const u8 = "en-US", primary_release_year: ?u32 = null, page: u32 = 1, region: ?[]u8 = undefined, year: ?u32 = null }) Query {
-    var fields = std.ArrayList(Field).init(allocator);
-    defer fields.deinit();
-    fields.append(Field.fromString(.{ .label = "query", .val = params.query })) catch unreachable;
-    fields.append(Field.fromBoolean(.{ .label = "include_adult", .val = params.include_adult })) catch unreachable;
-    fields.append(Field.fromString(.{ .label = "language", .val = params.language })) catch unreachable;
-    fields.append(Field.fromInt(.{ .label = "page", .val = params.page })) catch unreachable;
-    if (params.year != null) fields.append(Field.fromInt(.{ .label = "year", .val = params.year orelse unreachable })) catch unreachable;
-    if (params.primary_release_year != null) fields.append(Field.fromInt(.{ .label = "primary_release_year", .val = params.primary_release_year orelse unreachable })) catch unreachable;
-    if (params.region != null) fields.append(Field.fromString(.{ .label = "region", .val = params.region orelse unreachable })) catch unreachable;
-
-    return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/search/movie", .response_type = ResponseType.search_movie };
-}
-
-pub fn movieDetailsQuery(allocator: std.mem.Allocator, params: struct { movie_id: u32 }) Query {
-    var fields = std.ArrayList(Field).init(allocator);
-    defer fields.deinit();
-    fields.append(Field.fromInt(.{ .label = "movie_id", .val = params.movie_id, .field_type = FieldType.path_param })) catch unreachable;
-
-    return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}", .response_type = ResponseType.movie_details };
-}
 
 pub const FieldType = enum { path_param, query_param, header_param };
 
@@ -203,17 +203,3 @@ const SearchMovieResponseObject = struct { adult: bool, backdrop_path: ?[]u8, ge
 const SearchMovieResponse = struct { page: u32, results: []SearchMovieResponseObject, total_pages: u32, total_results: u32 };
 
 const MovieDetailsResponse = struct { adult: bool, backdrop_path: []u8, belongs_to_collection: ?[]u8, budget: u32, genres: []Genre, homepage: []u8, id: u32, imdb_id: ?[]u8, origin_country: [][]u8, original_language: ?[]u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, production_companies: []ProductionCompany, production_countries: []ProductionCountry, release_date: ?[]u8, revenue: u32, runtime: u32, spoken_languages: []SpokenLanguage, status: ?[]u8, tagline: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32 };
-
-pub fn main() void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    const q = searchMovieQuery(allocator, .{ .query = "Hello" });
-    std.debug.print("{any}", .{q});
-    defer allocator.free(q.fields);
-
-    const q2 = movieDetailsQuery(allocator, .{ .movie_id = 345 });
-    std.debug.print("{any}", .{q2});
-    defer allocator.free(q2.fields);
-}
