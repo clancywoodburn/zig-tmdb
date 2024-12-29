@@ -71,10 +71,15 @@ pub const TmdbSession = struct {
         return response_object;
     }
 
-    pub fn get(self: TmdbSession, query: anytype) !query.return_type {
+    pub fn get(self: TmdbSession, query: Query) !TmdbResponse {
         const response = try self.launchRequest(query.bake(self.alloc));
-        const response_object = try self.parseJson(query.return_type, response);
-        return response_object;
+
+        switch (query.response_type) {
+            .search_movie => {
+                const resp_obj = try self.parseJson(SearchMovieResponse, response);
+                return TmdbResponse{ .search_movie = resp_obj };
+            },
+        }
     }
 };
 
@@ -93,6 +98,96 @@ pub fn yearToStr(y: ?u32) ?[]const u8 {
     // return &buf;
 }
 
+pub const Field = struct {
+    value: QueryValue,
+    label: []const u8 = "",
+    field_type: FieldType = FieldType.query_param,
+
+    pub fn fromBoolean(label: []const u8, val: bool) Field {
+        const f_t = FieldType.query_param;
+        return Field{ .value = QueryValue{ .boolean = val }, .label = label, .field_type = f_t };
+    }
+
+    pub fn fromString(label: []const u8, val: []const u8) Field {
+        const f_t = FieldType.query_param;
+        return Field{ .value = QueryValue{ .string = val }, .label = label, .field_type = f_t };
+    }
+
+    pub fn fromInt(label: []const u8, val: u32) Field {
+        const f_t = FieldType.query_param;
+        return Field{ .value = QueryValue{ .int = val }, .label = label, .field_type = f_t };
+    }
+
+    pub fn formatLabel(self: Field, allocator: std.mem.Allocator) []const u8 {
+        return switch (self.value) {
+            .string => |string| string,
+            .boolean => |boolean| if (boolean) "true" else "false",
+            .int => |int| std.fmt.allocPrint(allocator, "{d}", .{int}) catch unreachable,
+            else => "",
+        };
+    }
+
+    pub fn requiresDeinit(self: Field) bool {
+        return switch (self.value) {
+            .int => true,
+            else => false,
+        };
+    }
+};
+
+const ResponseType = enum { search_movie };
+const TmdbResponse = union(ResponseType) { search_movie: SearchMovieResponse };
+
+pub const Query = struct {
+    fields: []Field,
+    endpoint: []const u8,
+    response_type: ResponseType,
+
+    pub fn bake(self: Query, allocator: std.mem.Allocator) []const u8 {
+        var query_string = std.ArrayList(u8).init(allocator);
+        defer query_string.deinit();
+        var writer = query_string.writer();
+        for (self.fields) |field| {
+            if (field.field_type == FieldType.query_param) {
+                const val = field.formatLabel(allocator);
+                defer if (field.requiresDeinit()) allocator.free(val);
+                writer.print("{s}={s}&", .{ field.label, val }) catch unreachable;
+            }
+        }
+        _ = query_string.pop();
+        // const query_string = toQueryString(allocator, query_params, query_labels) catch unreachable;
+        // defer allocator.free(query_string);
+        if (query_string.items.len > 0) {
+            return std.mem.join(allocator, "?", &.{ self.endpoint, query_string.items }) catch unreachable;
+        }
+
+        return std.fmt.allocPrint(allocator, "{s}", .{self.endpoint}) catch unreachable;
+        //const out = try std.fmt.allocPrint(allocator, "{s}", .{self.query});
+        //defer allocator.free(out);
+        //return try std.mem.join(allocator, "?", &.{ TEMPLATE, out });
+    }
+};
+
+pub fn searchMovieQuery(allocator: std.mem.Allocator, params: struct { query: []const u8, include_adult: bool = false, language: []const u8 = "en-US", primary_release_year: ?u32 = null, page: u32 = 1, region: ?[]u8 = undefined, year: ?u32 = null }) Query {
+    var fields = std.ArrayList(Field).init(allocator);
+    defer fields.deinit();
+    fields.append(Field.fromString("query", params.query)) catch unreachable;
+    fields.append(Field.fromBoolean("include_adult", params.include_adult)) catch unreachable;
+    fields.append(Field.fromString("language", params.language)) catch unreachable;
+    fields.append(Field.fromInt("page", params.page)) catch unreachable;
+    if (params.year != null) fields.append(Field.fromInt("year", params.year orelse unreachable)) catch unreachable;
+    if (params.primary_release_year != null) fields.append(Field.fromInt("primary_release_year", params.primary_release_year orelse unreachable)) catch unreachable;
+    if (params.region != null) fields.append(Field.fromString("region", params.region orelse unreachable)) catch unreachable;
+
+    return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/search/movie", .response_type = ResponseType.search_movie };
+}
+
+pub const FieldType = enum { path_param, query_param, header_param };
+
+const QueryValueTag = enum { int, string, boolean, none };
+
+pub const QueryValue = union(QueryValueTag) { int: u32, string: []const u8, boolean: bool, none };
+
 pub const SearchMovieQuery = struct {
     return_type: type = SearchMovieResponse,
     query: []const u8,
@@ -103,55 +198,55 @@ pub const SearchMovieQuery = struct {
     region: ?[]u8 = undefined,
     year: ?u32 = undefined,
 
-    pub fn bake(self: SearchMovieQuery, allocator: std.mem.Allocator) []const u8 {
-        const TEMPLATE = "https://api.themoviedb.org/3/search/movie";
-        std.debug.print("{any}\n", .{self.primary_release_year});
-        const pry: ?[]u8 = blk: {
-            if (self.primary_release_year == null) {
-                break :blk null;
-            } else {
-                const v = std.fmt.allocPrint(allocator, "{d}", .{self.primary_release_year orelse unreachable}) catch unreachable;
-                // std.debug.print("{s}", .{v});
-                break :blk v;
-            }
-        };
-        defer if (pry != null) allocator.free(pry orelse unreachable);
-        std.debug.print("{any}", .{pry});
-
-        const pg = std.fmt.allocPrint(allocator, "{d}", .{self.page}) catch unreachable;
-        defer allocator.free(pg);
-        const query_params = &.{ self.query, boolToStr(self.include_adult), self.language, pry, pg, self.region, yearToStr(self.year) };
-        const query_labels = &.{ "query", "include_adult", "language", "primary_release_year", "page", "region", "year" };
-
-        const query_string = toQueryString(allocator, query_params, query_labels) catch unreachable;
-        defer allocator.free(query_string);
-        if (query_string.len > 0) {
-            return std.mem.join(allocator, "?", &.{ TEMPLATE, query_string }) catch unreachable;
-        }
-
-        return std.fmt.allocPrint(allocator, "{s}", .{TEMPLATE}) catch unreachable;
-        //const out = try std.fmt.allocPrint(allocator, "{s}", .{self.query});
-        //defer allocator.free(out);
-        //return try std.mem.join(allocator, "?", &.{ TEMPLATE, out });
-    }
+    // pub fn bake(self: SearchMovieQuery, allocator: std.mem.Allocator) []const u8 {
+    //     const TEMPLATE = "https://api.themoviedb.org/3/search/movie";
+    //     std.debug.print("{any}\n", .{self.primary_release_year});
+    //     const pry: ?[]u8 = blk: {
+    //         if (self.primary_release_year == null) {
+    //             break :blk null;
+    //         } else {
+    //             const v = std.fmt.allocPrint(allocator, "{d}", .{self.primary_release_year orelse unreachable}) catch unreachable;
+    //             // std.debug.print("{s}", .{v});
+    //             break :blk v;
+    //         }
+    //     };
+    //     defer if (pry != null) allocator.free(pry orelse unreachable);
+    //     std.debug.print("{any}", .{pry});
+    //
+    //     const pg = std.fmt.allocPrint(allocator, "{d}", .{self.page}) catch unreachable;
+    //     defer allocator.free(pg);
+    //     const query_params = &.{ self.query, boolToStr(self.include_adult), self.language, pry, pg, self.region, yearToStr(self.year) };
+    //     const query_labels = &.{ "query", "include_adult", "language", "primary_release_year", "page", "region", "year" };
+    //
+    //     const query_string = toQueryString(allocator, query_params, query_labels) catch unreachable;
+    //     defer allocator.free(query_string);
+    //     if (query_string.len > 0) {
+    //         return std.mem.join(allocator, "?", &.{ TEMPLATE, query_string }) catch unreachable;
+    //     }
+    //
+    //     return std.fmt.allocPrint(allocator, "{s}", .{TEMPLATE}) catch unreachable;
+    //     //const out = try std.fmt.allocPrint(allocator, "{s}", .{self.query});
+    //     //defer allocator.free(out);
+    //     //return try std.mem.join(allocator, "?", &.{ TEMPLATE, out });
+    // }
 };
 
-pub fn toQueryString(allocator: std.mem.Allocator, query_params: []const ?[]const u8, query_labels: []const ?[]const u8) ![]u8 {
-    std.debug.print("{s}\n", .{"here1"});
-    var output = std.ArrayList(u8).init(allocator);
-    defer output.deinit();
-    var writer = output.writer();
-    for (query_params, query_labels) |p, l| {
-        if (p == null) {
-            continue;
-        }
-        std.debug.print("{s} AND {s}\n", .{ l orelse unreachable, p orelse unreachable });
-        _ = try writer.print("{s}={s}&", .{ l orelse "", p orelse unreachable });
-    }
-    _ = output.pop();
-
-    return std.mem.Allocator.dupe(allocator, u8, output.items[0..]);
-}
+// pub fn toQueryString(allocator: std.mem.Allocator, fields: []Field) ![]u8 {
+//     std.debug.print("{s}\n", .{"here1"});
+//     var output = std.ArrayList(u8).init(allocator);
+//     defer output.deinit();
+//     var writer = output.writer();
+//     for (query_params, query_labels) |p, l| {
+//         if (p == null) {
+//             continue;
+//         }
+//         std.debug.print("{s} AND {s}\n", .{ l orelse unreachable, p orelse unreachable });
+//         _ = try writer.print("{s}={s}&", .{ l orelse "", p orelse unreachable });
+//     }
+//     _ = output.pop();
+//
+//     return std.mem.Allocator.dupe(allocator, u8, output.items[0..]);
+// }
 
 const TmdbQuery = struct {
     url: []u8,
@@ -170,3 +265,13 @@ const SearchMovieResponseObject = struct { adult: bool, backdrop_path: ?[]u8, ge
 const SearchMovieResponse = struct { page: u32, results: []SearchMovieResponseObject, total_pages: u32, total_results: u32 };
 
 const MovieDetailsResponse = struct { adult: bool, backdrop_path: []u8, belongs_to_collection: ?[]u8, budget: u32, genres: []Genre, homepage: []u8, id: u32, imdb_id: ?[]u8, origin_country: [][]u8, original_language: ?[]u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, production_companies: []ProductionCompany, production_countries: []ProductionCountry, release_date: ?[]u8, revenue: u32, runtime: u32, spoken_languages: []SpokenLanguage, status: ?[]u8, tagline: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32 };
+
+pub fn main() void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const q = searchMovieQuery(allocator, .{ .query = "Hello" });
+    std.debug.print("{any}", .{q});
+    defer allocator.free(q.fields);
+}
