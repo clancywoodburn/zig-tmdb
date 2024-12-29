@@ -9,6 +9,7 @@ pub const TmdbSession = struct {
     }
 
     fn parseJson(self: TmdbSession, comptime T: type, json_str: []const u8) !T {
+        std.debug.print("{s}", .{json_str});
         const parsed = try std.json.parseFromSlice(T, self.alloc, json_str, .{});
 
         const resp = parsed.value;
@@ -61,6 +62,10 @@ pub const TmdbSession = struct {
                 const resp_obj = try self.parseJson(MovieDetailsResponse, response);
                 return TmdbResponse{ .movie_details = resp_obj };
             },
+            .movie_credits => {
+                const resp_obj = try self.parseJson(MovieCreditsResponse, response);
+                return TmdbResponse{ .movie_credits = resp_obj };
+            },
         }
     }
 };
@@ -99,8 +104,8 @@ pub const Field = struct {
     }
 };
 
-const ResponseType = enum { search_movie, movie_details };
-const TmdbResponse = union(ResponseType) { search_movie: SearchMovieResponse, movie_details: MovieDetailsResponse };
+const ResponseType = enum { search_movie, movie_details, movie_credits };
+pub const TmdbResponse = union(ResponseType) { search_movie: SearchMovieResponse, movie_details: MovieDetailsResponse, movie_credits: MovieCreditsResponse };
 
 pub const Query = struct {
     fields: []Field,
@@ -186,6 +191,14 @@ pub const Query = struct {
 
         return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}", .response_type = ResponseType.movie_details };
     }
+
+    pub fn movieCredits(allocator: std.mem.Allocator, params: struct { movie_id: u32 }) Query {
+        var fields = std.ArrayList(Field).init(allocator);
+        defer fields.deinit();
+        fields.append(Field.fromInt(.{ .label = "movie_id", .val = params.movie_id, .field_type = FieldType.path_param })) catch unreachable;
+
+        return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}/credits", .response_type = ResponseType.movie_credits };
+    }
 };
 
 pub const FieldType = enum { path_param, query_param, header_param };
@@ -203,3 +216,5 @@ const SearchMovieResponseObject = struct { adult: bool, backdrop_path: ?[]u8, ge
 const SearchMovieResponse = struct { page: u32, results: []SearchMovieResponseObject, total_pages: u32, total_results: u32 };
 
 const MovieDetailsResponse = struct { adult: bool, backdrop_path: []u8, belongs_to_collection: ?[]u8, budget: u32, genres: []Genre, homepage: []u8, id: u32, imdb_id: ?[]u8, origin_country: [][]u8, original_language: ?[]u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, production_companies: []ProductionCompany, production_countries: []ProductionCountry, release_date: ?[]u8, revenue: u32, runtime: u32, spoken_languages: []SpokenLanguage, status: ?[]u8, tagline: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32 };
+
+const MovieCreditsResponse = struct { id: u32, cast: []struct { adult: bool = true, gender: u32, id: u32, known_for_department: []u8, name: []u8, original_name: []u8, popularity: f32 = 0, profile_path: ?[]u8, cast_id: u32 = 0, character: []u8, credit_id: []u8, order: u32 = 0 }, crew: []struct { adult: bool = true, gender: u32, id: u32, known_for_department: []u8, name: []u8, original_name: []u8, popularity: f32 = 0, profile_path: ?[]u8, credit_id: []u8, department: []u8, job: []u8 } };
