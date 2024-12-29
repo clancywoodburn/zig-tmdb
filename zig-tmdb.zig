@@ -79,6 +79,7 @@ pub const TmdbSession = struct {
                 const resp_obj = try self.parseJson(SearchMovieResponse, response);
                 return TmdbResponse{ .search_movie = resp_obj };
             },
+            else => return error.BadQuery,
         }
     }
 };
@@ -103,19 +104,16 @@ pub const Field = struct {
     label: []const u8 = "",
     field_type: FieldType = FieldType.query_param,
 
-    pub fn fromBoolean(label: []const u8, val: bool) Field {
-        const f_t = FieldType.query_param;
-        return Field{ .value = QueryValue{ .boolean = val }, .label = label, .field_type = f_t };
+    pub fn fromBoolean(params: struct { label: []const u8 = "", val: bool, field_type: FieldType = .query_param }) Field {
+        return Field{ .value = QueryValue{ .boolean = params.val }, .label = params.label, .field_type = params.field_type };
     }
 
-    pub fn fromString(label: []const u8, val: []const u8) Field {
-        const f_t = FieldType.query_param;
-        return Field{ .value = QueryValue{ .string = val }, .label = label, .field_type = f_t };
+    pub fn fromString(params: struct { label: []const u8 = "", val: []const u8, field_type: FieldType = .query_param }) Field {
+        return Field{ .value = QueryValue{ .string = params.val }, .label = params.label, .field_type = params.field_type };
     }
 
-    pub fn fromInt(label: []const u8, val: u32) Field {
-        const f_t = FieldType.query_param;
-        return Field{ .value = QueryValue{ .int = val }, .label = label, .field_type = f_t };
+    pub fn fromInt(params: struct { label: []const u8 = "", val: u32, field_type: FieldType = .query_param }) Field {
+        return Field{ .value = QueryValue{ .int = params.val }, .label = params.label, .field_type = params.field_type };
     }
 
     pub fn formatLabel(self: Field, allocator: std.mem.Allocator) []const u8 {
@@ -135,8 +133,8 @@ pub const Field = struct {
     }
 };
 
-const ResponseType = enum { search_movie };
-const TmdbResponse = union(ResponseType) { search_movie: SearchMovieResponse };
+const ResponseType = enum { search_movie, movie_details };
+const TmdbResponse = union(ResponseType) { search_movie: SearchMovieResponse, movie_details: MovieDetailsResponse };
 
 pub const Query = struct {
     fields: []Field,
@@ -144,24 +142,58 @@ pub const Query = struct {
     response_type: ResponseType,
 
     pub fn bake(self: Query, allocator: std.mem.Allocator) []const u8 {
+        var base_string = std.ArrayList(u8).init(allocator);
+        var base_writer = base_string.writer();
+
+        var path_params = std.ArrayList(Field).init(allocator);
+        path_params.deinit();
         var query_string = std.ArrayList(u8).init(allocator);
         defer query_string.deinit();
         var writer = query_string.writer();
         for (self.fields) |field| {
-            if (field.field_type == FieldType.query_param) {
-                const val = field.formatLabel(allocator);
-                defer if (field.requiresDeinit()) allocator.free(val);
-                writer.print("{s}={s}&", .{ field.label, val }) catch unreachable;
+            switch (field.field_type) {
+                .query_param => {
+                    const val = field.formatLabel(allocator);
+                    defer if (field.requiresDeinit()) allocator.free(val);
+                    writer.print("{s}={s}&", .{ field.label, val }) catch unreachable;
+                },
+                .path_param => {
+                    path_params.append(field) catch unreachable;
+                },
+                else => continue,
             }
         }
         _ = query_string.pop();
+
+        var i: usize = 0;
+        while (i < self.endpoint.len) {
+            if (self.endpoint[i] == '{') {
+                const end = std.mem.indexOf(u8, self.endpoint[i + 1 ..], "}") orelse unreachable;
+                const key = self.endpoint[i + 1 .. i + 1 + end];
+
+                for (path_params.items) |param| {
+                    if (std.mem.eql(u8, param.label, key)) {
+                        const val = param.formatLabel(allocator);
+                        defer if (param.requiresDeinit()) allocator.free(val);
+                        _ = base_writer.write(val) catch unreachable;
+                        break;
+                    }
+                }
+
+                i += 1 + end + 1;
+            } else {
+                _ = base_writer.writeByte(self.endpoint[i]) catch unreachable;
+                i += 1;
+            }
+        }
+
         // const query_string = toQueryString(allocator, query_params, query_labels) catch unreachable;
         // defer allocator.free(query_string);
         if (query_string.items.len > 0) {
-            return std.mem.join(allocator, "?", &.{ self.endpoint, query_string.items }) catch unreachable;
+            return std.mem.join(allocator, "?", &.{ base_string.items, query_string.items }) catch unreachable;
         }
 
-        return std.fmt.allocPrint(allocator, "{s}", .{self.endpoint}) catch unreachable;
+        return std.fmt.allocPrint(allocator, "{s}", .{base_string.items}) catch unreachable;
         //const out = try std.fmt.allocPrint(allocator, "{s}", .{self.query});
         //defer allocator.free(out);
         //return try std.mem.join(allocator, "?", &.{ TEMPLATE, out });
@@ -171,16 +203,33 @@ pub const Query = struct {
 pub fn searchMovieQuery(allocator: std.mem.Allocator, params: struct { query: []const u8, include_adult: bool = false, language: []const u8 = "en-US", primary_release_year: ?u32 = null, page: u32 = 1, region: ?[]u8 = undefined, year: ?u32 = null }) Query {
     var fields = std.ArrayList(Field).init(allocator);
     defer fields.deinit();
-    fields.append(Field.fromString("query", params.query)) catch unreachable;
-    fields.append(Field.fromBoolean("include_adult", params.include_adult)) catch unreachable;
-    fields.append(Field.fromString("language", params.language)) catch unreachable;
-    fields.append(Field.fromInt("page", params.page)) catch unreachable;
-    if (params.year != null) fields.append(Field.fromInt("year", params.year orelse unreachable)) catch unreachable;
-    if (params.primary_release_year != null) fields.append(Field.fromInt("primary_release_year", params.primary_release_year orelse unreachable)) catch unreachable;
-    if (params.region != null) fields.append(Field.fromString("region", params.region orelse unreachable)) catch unreachable;
+    fields.append(Field.fromString(.{ .label = "query", .val = params.query })) catch unreachable;
+    fields.append(Field.fromBoolean(.{ .label = "include_adult", .val = params.include_adult })) catch unreachable;
+    fields.append(Field.fromString(.{ .label = "language", .val = params.language })) catch unreachable;
+    fields.append(Field.fromInt(.{ .label = "page", .val = params.page })) catch unreachable;
+    if (params.year != null) fields.append(Field.fromInt(.{ .label = "year", .val = params.year orelse unreachable })) catch unreachable;
+    if (params.primary_release_year != null) fields.append(Field.fromInt(.{ .label = "primary_release_year", .val = params.primary_release_year orelse unreachable })) catch unreachable;
+    if (params.region != null) fields.append(Field.fromString(.{ .label = "region", .val = params.region orelse unreachable })) catch unreachable;
 
     return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/search/movie", .response_type = ResponseType.search_movie };
 }
+
+pub fn movieDetailsQuery(allocator: std.mem.Allocator, params: struct { movie_id: u32 }) Query {
+    var fields = std.ArrayList(Field).init(allocator);
+    defer fields.init();
+    fields.append(Field.fromInt(.{ .label = "movie_id", .val = params.movie_id, .field_type = FieldType.path_param }));
+
+    return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}", .response_type = ResponseType.movie_details };
+}
+
+// const ENDPOINT = "https://api.themoviedb.org/3/movie/";
+//
+// const end_headed = try std.fmt.allocPrint(self.alloc, "{s}{d}", .{ ENDPOINT, movie_id });
+//
+// const response = try self.launchRequest(end_headed);
+// std.debug.print("{s}\n", .{response});
+// const response_object = try self.parseJson(MovieDetailsResponse, response);
+// return response_object;
 
 pub const FieldType = enum { path_param, query_param, header_param };
 
