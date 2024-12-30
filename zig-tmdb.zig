@@ -74,6 +74,13 @@ pub const TmdbSession = struct {
     }
 };
 
+fn isValidUnencoded(c: u8) bool {
+    return switch (c) {
+        '0'...'9', 'A'...'Z', 'a'...'z', '-', '.', '_', '~' => true,
+        else => false,
+    };
+}
+
 pub const Field = struct {
     value: QueryValue,
     label: []const u8 = "",
@@ -92,12 +99,18 @@ pub const Field = struct {
     }
 
     pub fn formatLabel(self: Field, allocator: std.mem.Allocator) []const u8 {
-        return switch (self.value) {
-            .string => |string| string, // TODO: if this is a query parameter, should have certain characters swapped (see: https://en.wikipedia.org/wiki/Percent-encoding)
-            .boolean => |boolean| if (boolean) "true" else "false",
-            .int => |int| std.fmt.allocPrint(allocator, "{d}", .{int}) catch unreachable,
-            else => "",
-        };
+        switch (self.value) {
+            .string => |string| {
+                if (self.field_type != .query_param) return string;
+                var encoded_string = std.ArrayList(u8).init(allocator);
+                defer encoded_string.deinit();
+                std.Uri.Component.percentEncode(encoded_string.writer(), string, isValidUnencoded) catch unreachable;
+                return std.mem.Allocator.dupe(allocator, u8, encoded_string.items) catch unreachable;
+            }, // TODO: if this is a query parameter, should have certain characters swapped (see: https://en.wikipedia.org/wiki/Percent-encoding)
+            .boolean => |boolean| return if (boolean) "true" else "false",
+            .int => |int| return std.fmt.allocPrint(allocator, "{d}", .{int}) catch unreachable,
+            else => return "",
+        }
     }
 
     pub fn requiresDeinit(self: Field) bool {
