@@ -9,7 +9,6 @@ pub const TmdbSession = struct {
     }
 
     fn parseJson(self: TmdbSession, comptime T: type, json_str: []const u8) !T {
-        std.debug.print("{s}", .{json_str});
         const parsed = try std.json.parseFromSlice(T, self.alloc, json_str, .{});
 
         const resp = parsed.value;
@@ -53,6 +52,7 @@ pub const TmdbSession = struct {
     pub fn get(self: TmdbSession, query: Query) !TmdbResponse {
         const response = try self.launchRequest(query.bake(self.alloc));
 
+        // TODO: surely there is a better way of doing this?
         switch (query.response_type) {
             .search_movie => {
                 const resp_obj = try self.parseJson(SearchMovieResponse, response);
@@ -65,6 +65,10 @@ pub const TmdbSession = struct {
             .movie_credits => {
                 const resp_obj = try self.parseJson(MovieCreditsResponse, response);
                 return TmdbResponse{ .movie_credits = resp_obj };
+            },
+            .movie_external_ids => {
+                const resp_obj = try self.parseJson(MovieExternalIdsResponse, response);
+                return TmdbResponse{ .movie_external_ids = resp_obj };
             },
         }
     }
@@ -89,7 +93,7 @@ pub const Field = struct {
 
     pub fn formatLabel(self: Field, allocator: std.mem.Allocator) []const u8 {
         return switch (self.value) {
-            .string => |string| string,
+            .string => |string| string, // TODO: if this is a query parameter, should have certain characters swapped (see: https://en.wikipedia.org/wiki/Percent-encoding)
             .boolean => |boolean| if (boolean) "true" else "false",
             .int => |int| std.fmt.allocPrint(allocator, "{d}", .{int}) catch unreachable,
             else => "",
@@ -104,8 +108,8 @@ pub const Field = struct {
     }
 };
 
-const ResponseType = enum { search_movie, movie_details, movie_credits };
-pub const TmdbResponse = union(ResponseType) { search_movie: SearchMovieResponse, movie_details: MovieDetailsResponse, movie_credits: MovieCreditsResponse };
+const ResponseType = enum { search_movie, movie_details, movie_credits, movie_external_ids };
+pub const TmdbResponse = union(ResponseType) { search_movie: SearchMovieResponse, movie_details: MovieDetailsResponse, movie_credits: MovieCreditsResponse, movie_external_ids: MovieExternalIdsResponse };
 
 pub const Query = struct {
     fields: []Field,
@@ -200,6 +204,14 @@ pub const Query = struct {
 
         return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}/credits", .response_type = ResponseType.movie_credits };
     }
+
+    pub fn movieExternalIds(allocator: std.mem.Allocator, params: struct { movie_id: u32 }) Query {
+        var fields = std.ArrayList(Field).init(allocator);
+        defer fields.deinit();
+        fields.append(Field.fromInt(.{ .label = "movie_id", .val = params.movie_id, .field_type = FieldType.path_param })) catch unreachable;
+
+        return Query{ .fields = std.mem.Allocator.dupe(allocator, Field, fields.items[0..]) catch unreachable, .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}/external_ids", .response_type = ResponseType.movie_external_ids };
+    }
 };
 
 pub const FieldType = enum { path_param, query_param, header_param };
@@ -216,6 +228,7 @@ const SpokenLanguage = struct { english_name: []u8, iso_639_1: []u8, name: []u8 
 const SearchMovieResponseObject = struct { adult: bool, backdrop_path: ?[]u8, genre_ids: []u32, id: u32, original_language: []u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, release_date: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32 };
 const SearchMovieResponse = struct { page: u32, results: []SearchMovieResponseObject, total_pages: u32, total_results: u32 };
 
-const MovieDetailsResponse = struct { adult: bool, backdrop_path: []u8, belongs_to_collection: ?[]u8, budget: u32, genres: []Genre, homepage: []u8, id: u32, imdb_id: ?[]u8, origin_country: [][]u8, original_language: ?[]u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, production_companies: []ProductionCompany, production_countries: []ProductionCountry, release_date: ?[]u8, revenue: u32, runtime: u32, spoken_languages: []SpokenLanguage, status: ?[]u8, tagline: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32, credits: ?MovieCreditsResponse = null };
+const MovieDetailsResponse = struct { adult: bool, backdrop_path: []u8, belongs_to_collection: ?[]u8, budget: u32, genres: []Genre, homepage: []u8, id: u32, imdb_id: ?[]u8, origin_country: [][]u8, original_language: ?[]u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, production_companies: []ProductionCompany, production_countries: []ProductionCountry, release_date: ?[]u8, revenue: u32, runtime: u32, spoken_languages: []SpokenLanguage, status: ?[]u8, tagline: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32, credits: ?MovieCreditsResponse = null, external_ids: ?MovieExternalIdsResponse = null };
 
 const MovieCreditsResponse = struct { id: u32 = 0, cast: []struct { adult: bool = true, gender: u32, id: u32, known_for_department: []u8, name: []u8, original_name: []u8, popularity: f32 = 0, profile_path: ?[]u8, cast_id: u32 = 0, character: []u8, credit_id: []u8, order: u32 = 0 }, crew: []struct { adult: bool = true, gender: u32, id: u32, known_for_department: []u8, name: []u8, original_name: []u8, popularity: f32 = 0, profile_path: ?[]u8, credit_id: []u8, department: []u8, job: []u8 } };
+const MovieExternalIdsResponse = struct { id: u32 = 0, imdb_id: ?[]u8, wikidata_id: ?[]u8, facebook_id: ?[]u8, instagram_id: ?[]u8, twitter_id: ?[]u8 };
