@@ -72,6 +72,10 @@ pub const TmdbSession = struct {
                 const resp_obj = try std.json.parseFromSlice(MovieExternalIdsResponse, allocator, response, .{});
                 return TmdbResponse{ .movie_external_ids = resp_obj };
             },
+            .movie_keywords => {
+                const resp_obj = try std.json.parseFromSlice(MovieKeywordsResponse, allocator, response, .{});
+                return TmdbResponse{ .movie_keywords = resp_obj };
+            },
         }
     }
 };
@@ -133,8 +137,8 @@ pub const Field = struct {
     }
 };
 
-const ResponseType = enum { search_movie, movie_details, movie_credits, movie_external_ids };
-pub const TmdbResponse = union(ResponseType) { search_movie: std.json.Parsed(SearchMovieResponse), movie_details: std.json.Parsed(MovieDetailsResponse), movie_credits: std.json.Parsed(MovieCreditsResponse), movie_external_ids: std.json.Parsed(MovieExternalIdsResponse) };
+const ResponseType = enum { search_movie, movie_details, movie_credits, movie_external_ids, movie_keywords };
+pub const TmdbResponse = union(ResponseType) { search_movie: std.json.Parsed(SearchMovieResponse), movie_details: std.json.Parsed(MovieDetailsResponse), movie_credits: std.json.Parsed(MovieCreditsResponse), movie_external_ids: std.json.Parsed(MovieExternalIdsResponse), movie_keywords: std.json.Parsed(MovieKeywordsResponse) };
 
 pub const Query = struct {
     fields: []Field,
@@ -240,6 +244,14 @@ pub const Query = struct {
 
         return Query{ .fields = try std.mem.Allocator.dupe(allocator, Field, fields.items[0..]), .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}/external_ids", .response_type = ResponseType.movie_external_ids };
     }
+
+    pub fn movieKeywords(allocator: std.mem.Allocator, params: struct { movie_id: u32 }) !Query {
+        var fields = std.ArrayList(Field).init(allocator);
+        defer fields.deinit();
+        try fields.append(Field.fromInt(.{ .label = "movie_id", .val = params.movie_id, .field_type = FieldType.path_param }));
+
+        return Query{ .fields = try std.mem.Allocator.dupe(allocator, Field, fields.items[0..]), .endpoint = "https://api.themoviedb.org/3/movie/{movie_id}/credits", .response_type = ResponseType.movie_keywords };
+    }
 };
 
 pub const FieldType = enum { path_param, query_param, header_param };
@@ -257,7 +269,8 @@ const Collection = struct { id: u32, name: []u8, poster_path: ?[]u8, backdrop_pa
 const SearchMovieResponseObject = struct { adult: bool, backdrop_path: ?[]u8, genre_ids: []u32, id: u32, original_language: []u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, release_date: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32 };
 const SearchMovieResponse = struct { page: u32, results: []SearchMovieResponseObject, total_pages: u32, total_results: u32 };
 
-const MovieDetailsResponse = struct { adult: bool, backdrop_path: ?[]u8, belongs_to_collection: ?Collection, budget: u32, genres: []Genre, homepage: ?[]u8, id: u32, imdb_id: ?[]u8, origin_country: [][]u8, original_language: ?[]u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, production_companies: []ProductionCompany, production_countries: []ProductionCountry, release_date: ?[]u8, revenue: u32, runtime: u32, spoken_languages: []SpokenLanguage, status: ?[]u8, tagline: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32, credits: ?MovieCreditsResponse = null, external_ids: ?MovieExternalIdsResponse = null };
+const MovieDetailsResponse = struct { adult: bool, backdrop_path: ?[]u8, belongs_to_collection: ?Collection, budget: u32, genres: []Genre, homepage: ?[]u8, id: u32, imdb_id: ?[]u8, origin_country: [][]u8, original_language: ?[]u8, original_title: []u8, overview: []u8, popularity: f32, poster_path: ?[]u8, production_companies: []ProductionCompany, production_countries: []ProductionCountry, release_date: ?[]u8, revenue: u32, runtime: u32, spoken_languages: []SpokenLanguage, status: ?[]u8, tagline: ?[]u8, title: []u8, video: bool, vote_average: f32, vote_count: u32, credits: ?MovieCreditsResponse = null, external_ids: ?MovieExternalIdsResponse = null, keywords: ?MovieKeywordsResponse = null };
 
 const MovieCreditsResponse = struct { id: u32 = 0, cast: []struct { adult: bool = true, gender: u32, id: u32, known_for_department: []u8, name: []u8, original_name: []u8, popularity: f32 = 0, profile_path: ?[]u8, cast_id: u32 = 0, character: []u8, credit_id: []u8, order: u32 = 0 }, crew: []struct { adult: bool = true, gender: u32, id: u32, known_for_department: []u8, name: []u8, original_name: []u8, popularity: f32 = 0, profile_path: ?[]u8, credit_id: []u8, department: []u8, job: []u8 } };
 const MovieExternalIdsResponse = struct { id: u32 = 0, imdb_id: ?[]u8, wikidata_id: ?[]u8, facebook_id: ?[]u8, instagram_id: ?[]u8, twitter_id: ?[]u8 };
+const MovieKeywordsResponse = struct { id: u32 = 0, keywords: []struct { id: u32 = 0, name: []const u8 } };
