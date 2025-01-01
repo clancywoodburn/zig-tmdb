@@ -2,10 +2,9 @@ const std = @import("std");
 
 pub const TmdbSession = struct {
     token: []const u8,
-    alloc: std.mem.Allocator,
 
-    pub fn init(token: []const u8, alloc: std.mem.Allocator) TmdbSession {
-        return TmdbSession{ .token = token, .alloc = alloc };
+    pub fn init(token: []const u8) TmdbSession {
+        return TmdbSession{ .token = token };
     }
 
     fn parseJson(allocator: std.mem.Allocator, comptime T: type, json_str: []const u8) !T {
