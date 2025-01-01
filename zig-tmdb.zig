@@ -8,26 +8,27 @@ pub const TmdbSession = struct {
         return TmdbSession{ .token = token, .alloc = alloc };
     }
 
-    fn parseJson(self: TmdbSession, comptime T: type, json_str: []const u8) !T {
-        const parsed = try std.json.parseFromSlice(T, self.alloc, json_str, .{});
+    fn parseJson(allocator: std.mem.Allocator, comptime T: type, json_str: []const u8) !T {
+        const parsed = try std.json.parseFromSlice(T, allocator, json_str, .{});
 
-        const resp = parsed.value;
-
-        return resp;
+        defer parsed.deinit();
+        return parsed.value;
     }
 
-    fn launchRequest(self: TmdbSession, uri_str: []const u8) ![]const u8 {
+    fn launchRequest(self: TmdbSession, allocator: std.mem.Allocator, uri_str: []const u8) ![]const u8 {
         // Make HTTP Client
-        var client = std.http.Client{ .allocator = self.alloc };
+        var client = std.http.Client{ .allocator = allocator };
+        defer client.deinit();
 
         // Allocate buffer for headers
         var head_buf: [4096]u8 = undefined;
 
         // Start HTTP request
         const uri = try std.Uri.parse(uri_str);
-        const auth = try std.mem.join(self.alloc, "", &.{ "Authorization: Bearer ", self.token });
+        const auth = try std.mem.join(allocator, "", &.{ "Authorization: Bearer ", self.token });
+        defer allocator.free(auth);
         var req = try client.open(.GET, uri, .{ .server_header_buffer = &head_buf, .headers = .{ .authorization = .{ .override = auth } } });
-
+        defer req.deinit();
         // Send HTTP Req
         try req.send();
         // Finish body of HTTP req
@@ -42,7 +43,7 @@ pub const TmdbSession = struct {
         }
 
         // Read the body
-        var body_buf: [1048576]u8 = undefined;
+        var body_buf: [262144]u8 = undefined;
 
         const body_len = try req.readAll(&body_buf);
 
@@ -50,25 +51,25 @@ pub const TmdbSession = struct {
     }
 
     pub fn get(self: TmdbSession, allocator: std.mem.Allocator, query: Query) !TmdbResponse {
-        const response = try self.launchRequest(try query.bake(allocator));
+        const q = try query.bake(allocator);
+        defer allocator.free(q);
+        const response = try self.launchRequest(allocator, q);
 
-        std.debug.print("{s}\n", .{response});
-        // TODO: surely there is a better way of doing this?
         switch (query.response_type) {
             .search_movie => {
-                const resp_obj = try self.parseJson(SearchMovieResponse, response);
+                const resp_obj = try std.json.parseFromSlice(SearchMovieResponse, allocator, response, .{});
                 return TmdbResponse{ .search_movie = resp_obj };
             },
             .movie_details => {
-                const resp_obj = try self.parseJson(MovieDetailsResponse, response);
+                const resp_obj = try std.json.parseFromSlice(MovieDetailsResponse, allocator, response, .{});
                 return TmdbResponse{ .movie_details = resp_obj };
             },
             .movie_credits => {
-                const resp_obj = try self.parseJson(MovieCreditsResponse, response);
+                const resp_obj = try std.json.parseFromSlice(MovieCreditsResponse, allocator, response, .{});
                 return TmdbResponse{ .movie_credits = resp_obj };
             },
             .movie_external_ids => {
-                const resp_obj = try self.parseJson(MovieExternalIdsResponse, response);
+                const resp_obj = try std.json.parseFromSlice(MovieExternalIdsResponse, allocator, response, .{});
                 return TmdbResponse{ .movie_external_ids = resp_obj };
             },
         }
@@ -105,7 +106,6 @@ pub const Field = struct {
                 if (self.field_type != .query_param) return string;
                 var encoded_string = std.ArrayList(u8).init(allocator);
                 defer encoded_string.deinit();
-                // std.debug.print("{s}\n\n", .{string});
                 try std.Uri.Component.percentEncode(encoded_string.writer(), string, isValidUnencoded);
                 return try std.mem.Allocator.dupe(allocator, u8, encoded_string.items);
             },
@@ -127,13 +127,14 @@ pub const Field = struct {
     pub fn requiresDeinit(self: Field) bool {
         return switch (self.value) {
             .int => true,
+            .string => self.field_type == .query_param,
             else => false,
         };
     }
 };
 
 const ResponseType = enum { search_movie, movie_details, movie_credits, movie_external_ids };
-pub const TmdbResponse = union(ResponseType) { search_movie: SearchMovieResponse, movie_details: MovieDetailsResponse, movie_credits: MovieCreditsResponse, movie_external_ids: MovieExternalIdsResponse };
+pub const TmdbResponse = union(ResponseType) { search_movie: std.json.Parsed(SearchMovieResponse), movie_details: std.json.Parsed(MovieDetailsResponse), movie_credits: std.json.Parsed(MovieCreditsResponse), movie_external_ids: std.json.Parsed(MovieExternalIdsResponse) };
 
 pub const Query = struct {
     fields: []Field,
@@ -142,10 +143,11 @@ pub const Query = struct {
 
     pub fn bake(self: Query, allocator: std.mem.Allocator) ![]const u8 {
         var base_string = std.ArrayList(u8).init(allocator);
+        defer base_string.deinit();
         var base_writer = base_string.writer();
 
         var path_params = std.ArrayList(Field).init(allocator);
-        path_params.deinit();
+        defer path_params.deinit();
         var query_string = std.ArrayList(u8).init(allocator);
         defer query_string.deinit();
         var writer = query_string.writer();
@@ -186,25 +188,21 @@ pub const Query = struct {
             }
         }
 
-        // const query_string = toQueryString(allocator, query_params, query_labels) catch unreachable;
-        // defer allocator.free(query_string);
         if (query_string.items.len > 0) {
             return try std.mem.join(allocator, "?", &.{ base_string.items, query_string.items });
         }
 
         return try std.fmt.allocPrint(allocator, "{s}", .{base_string.items});
-        //const out = try std.fmt.allocPrint(allocator, "{s}", .{self.query});
-        //defer allocator.free(out);
-        //return try std.mem.join(allocator, "?", &.{ TEMPLATE, out });
     }
 
     pub fn deinit(self: Query, allocator: std.mem.Allocator) void {
         for (self.fields) |field| {
             field.deinit(allocator);
         }
+        allocator.free(self.fields);
     }
 
-    pub fn searchMovie(allocator: std.mem.Allocator, params: struct { query: []const u8, include_adult: bool = false, language: []const u8 = "en-US", primary_release_year: ?u32 = null, page: u32 = 1, region: ?[]u8 = undefined, year: ?u32 = null }) !Query {
+    pub fn searchMovie(allocator: std.mem.Allocator, params: struct { query: []const u8, include_adult: bool = false, language: []const u8 = "en-US", primary_release_year: ?u32 = null, page: u32 = 1, region: ?[]u8 = null, year: ?u32 = null }) !Query {
         var fields = std.ArrayList(Field).init(allocator);
         defer fields.deinit();
         try fields.append(try Field.fromString(allocator, .{ .label = "query", .val = params.query }));
